@@ -121,19 +121,32 @@ func pointer_value(t *time.Time) {
 }
 
 func Benchmark_EmptyValue_Copy(b *testing.B) {
-	t := time.Now()
 	for i := 0; i < b.N; i++ {
 		for j := 0; j < 10; j++ {
+			t := time.Now()
 			empty_value(t)
 		}
 	}
 }
 
 func Benchmark_EmptyValue_Pointer(b *testing.B) {
-	t := time.Now()
 	for i := 0; i < b.N; i++ {
 		for j := 0; j < 10; j++ {
+			t := time.Now()
 			pointer_value(&t)
+		}
+	}
+}
+
+func Benchmark_Closure(b *testing.B) {
+	var f func() bool
+	for i := 0; i < b.N; i++ {
+		f = func() bool {
+			return i == 1
+		}
+
+		if f() {
+
 		}
 	}
 }

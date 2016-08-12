@@ -4,10 +4,11 @@ import (
 	"fmt"
 	"log"
 	"testing"
+	"time"
 	"unsafe"
 )
 
-func Test_Sizeof(t *testing.T) {
+func _Test_Sizeof(t *testing.T) {
 	r := restriction_container{}
 	b1 := make([][]byte, 1)
 	b2 := make([]restriction, 1)
@@ -18,109 +19,69 @@ func Test_Sizeof(t *testing.T) {
 type Test struct {
 }
 
-type BuilderFunc func(b RestrictionBuilder)
-type year_restriction_builder interface {
-	BYear(byte, byte) RestrictionBuilder // between year
-	FYear(byte) RestrictionBuilder       // from year
-	TYear(byte) RestrictionBuilder       // to year
-	EYear(byte) RestrictionBuilder       // every year
-	Year(byte) RestrictionBuilder        // this year
-
-	ABYear(byte, byte, BuilderFunc) // all between year
-	AFYear(byte, BuilderFunc)       // all from year
-	ATYear(byte, BuilderFunc)       // all to year
-	AEYear(byte, BuilderFunc)       // all every year
-	AYear(byte, BuilderFunc)        // all this year
-}
-type month_restriction_builder interface {
-	MonthBetween(byte, byte) RestrictionBuilder
-	MonthFrom(byte) RestrictionBuilder
-	MonthTo(byte) RestrictionBuilder
-	EveryMonth(byte) RestrictionBuilder
-	Month(byte) RestrictionBuilder
-
-	MonthBetweenAll(byte, byte, BuilderFunc)
-	MonthFromAll(byte, BuilderFunc)
-	MonthToAll(byte, BuilderFunc)
-	EveryMonthAll(byte, BuilderFunc)
-	MonthAll(byte, BuilderFunc)
-}
-type day_restriction_builder interface {
-	DayBetween(byte, byte) RestrictionBuilder
-	DayFrom(byte) RestrictionBuilder
-	DayTo(byte) RestrictionBuilder
-	EveryDay(byte) RestrictionBuilder
-	Day(byte) RestrictionBuilder
-
-	DayBetweenAll(byte, byte, BuilderFunc)
-	DayFromAll(byte, BuilderFunc)
-	DayToAll(byte, BuilderFunc)
-	EveryDayAll(byte, BuilderFunc)
-	DayAll(byte, BuilderFunc)
-}
-type hour_restriction_builder interface {
-	HourBetween(byte, byte) RestrictionBuilder
-	HourFrom(byte) RestrictionBuilder
-	HourTo(byte) RestrictionBuilder
-	EveryHour(byte) RestrictionBuilder
-	Hour(byte) RestrictionBuilder
-
-	HourBetweenAll(byte, byte, BuilderFunc)
-	HourFromAll(byte, BuilderFunc)
-	HourToAll(byte, BuilderFunc)
-	EveryHourAll(byte, BuilderFunc)
-	HourAll(byte, BuilderFunc)
-}
-type minute_restriction_builder interface {
-	MinuteBetween(byte, byte) RestrictionBuilder
-	MinuteFrom(byte) RestrictionBuilder
-	MinuteTo(byte) RestrictionBuilder
-	EveryMinute(byte) RestrictionBuilder
-	Minute(byte) RestrictionBuilder
-
-	MinuteBetweenAll(byte, byte, BuilderFunc)
-	MinuteFromAll(byte, BuilderFunc)
-	MinuteToAll(byte, BuilderFunc)
-	EveryMinuteAll(byte, BuilderFunc)
-	MinuteAll(byte, BuilderFunc)
-}
-type second_restriction_builder interface {
-	SecondBetween(byte, byte) RestrictionBuilder
-	SecondFrom(byte) RestrictionBuilder
-	SecondTo(byte) RestrictionBuilder
-	EverySecond(byte) RestrictionBuilder
-	Second(byte) RestrictionBuilder
-
-	SecondBetweenAll(byte, byte, BuilderFunc)
-	SecondFromAll(byte, BuilderFunc)
-	SecondToAll(byte, BuilderFunc)
-	EverySecondAll(byte, BuilderFunc)
-	SecondAll(byte, BuilderFunc)
-}
-
-type RestrictionBuilder interface {
-	year_restriction_builder
-	month_restriction_builder
-	day_restriction_builder
-	hour_restriction_builder
-	minute_restriction_builder
-	second_restriction_builder
-}
-
-func Test_builder(t *testing.T) {
-	b := RestrictionBuilder(nil)
+func _Test_builder(t *testing.T) {
+	r := NewRestriction()
+	b := NewBuilder(r)
 	b.YearBetweenAll(16, 18, func(b RestrictionBuilder) {
 	})
 
-	b.YearFromAll(16, func(b RestrictionBuilder) {
+	b.YearToAll(16, func(b RestrictionBuilder) {
 		b.MonthFromAll(2, func(b RestrictionBuilder) {
-			b.EveryMonth(2).Hour(10)
-			b.EveryHour(10).Hour(14).Minute(30)
+			b.Day(2).Hour(10)
+			b.Day(10).Hour(14).Minute(30)
 		})
 	})
 
 	b.MonthAll(2, func(b RestrictionBuilder) {
-		b.Day(25).EveryHour(7)
+		b.Day(25).HourEvery(7)
 	})
 
+	log.Println(r)
+}
+
+func Test_Schedule_Basic1(t *testing.T) {
+	r := NewRestriction()
+
+	b := NewBuilder(r)
+	b.MonthBetween(4, 10).MonthEvery(2).DayEveryAll(2, func(b RestrictionBuilder) {
+		b.HourBetween(12, 14).MinuteEvery(30)
+		b.HourFrom(16).MinuteFrom(0).MinuteEvery(30).Second(40)
+	})
+
+	start := time.Date(2016, 7, 30, 16, 40, 0, 0, time.UTC)
+	result := start
+	var ok bool
+	for i := 0; i < 21; i++ {
+		result, ok = r.Handle(result)
+		log.Printf("result %v %v", result, ok)
+		if !ok {
+			break
+		}
+	}
+	//	result, _ := r.Handle(start)
+	//	if result.Unix() != time.Date(2016, 9, 10, 10, 0, 0, 0, time.UTC).Unix() {
+	//		t.Fail()
+	//	}
+	//	result, _ = r.Handle(result)
+	//	if result.Unix() != time.Date(2016, 9, 10, 10, 10, 0, 0, time.UTC).Unix() {
+	//		t.Fail()
+	//	}
+	//	result, _ = r.Handle(result)
+	//	if result.Unix() != time.Date(2016, 9, 10, 10, 20, 0, 0, time.UTC).Unix() {
+	//		t.Fail()
+	//	}
+}
+
+func _Test_Schedule(t *testing.T) {
+	r := NewRestriction()
+	b := NewBuilder(r)
+
+	b.Month(6).DayEveryAll(1, func(b RestrictionBuilder) {
+		b.Hour(10)
+		b.HourBetweenAll(12, 13, func(b RestrictionBuilder) {
+			b.Minute(10)                    // точно в 10 минут (самый высокий приоритет)
+			b.MinuteFrom(30).MinuteEvery(5) // с 30 минут - каждые 5 минут
+			b.MinuteFrom(55).SecondEvery(5) // с 55 минут должно страбатывать это условие
+		})
+	})
 }

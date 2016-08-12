@@ -1,202 +1,182 @@
 package gosched
 
 import (
-	"container/list"
-	"fmt"
 	"time"
 )
 
-type TimerType byte
+const DATEPART_NOTSET byte = 0xff
 
 const (
-	TIMER_NULL     TimerType = 0x00
-	TIMER_PERIOD   TimerType = 0x01
-	TIMER_TIME     TimerType = 0x02
-	TIMER_INTERVAL TimerType = 0x03
+	DATEPART_YEAR   byte = 0x01
+	DATEPART_MONTH  byte = 0x02
+	DATEPART_DAY    byte = 0x03
+	DATEPART_HOUR   byte = 0x04
+	DATEPART_MINUTE byte = 0x05
+	DATEPART_SECOND byte = 0x06
 )
 
-type DatePart byte
-
-const (
-	DATEPART_YEAR   DatePart = 0x01
-	DATEPART_MONTH  DatePart = 0x02
-	DATEPART_DAY    DatePart = 0x03
-	DATEPART_HOUR   DatePart = 0x04
-	DATEPART_MINUTE DatePart = 0x05
-	DATEPART_SECOND DatePart = 0x06
-)
-
-// size 48
+// size
 type restriction_container struct {
-	rootId       byte
-	relations    [][]byte      // heap
-	restrictions []restriction // heap
+	roots        []byte          // корневые элементы
+	restrictions []restriction   // общий массив ограничений строителя
+	relations    map[byte][]byte // связи ограничений
+	last         time.Time       // последнее время, которое было сгенерировано планировщиком
 }
 
 const (
 	RESTRICTION_NULL     byte = 0x00
 	RESTRICTION_INTERVAL byte = 0x01
-	RESTRICTION_TIME     byte = 0x02
+	RESTRICTION_EXACT    byte = 0x02
 	RESTRICTION_PERIOD   byte = 0x03
 )
 
 type restriction struct {
-	r_type TimerType // null, interval, period, time
-	part   DatePart  // part of date
-	value  byte      // period, exact, operator
-	from   byte      // interval from
-	to     byte      // interval to
+	r_type byte // null, interval, period, time
+	part   byte // part of date
+	value  byte // period, exact, operator
+	from   byte // interval from
+	to     byte // interval to
 }
 
-func (c *restriction_container) Handle(restrictionId byte, t time.Time) (res bool, time time.Time) {
-	res = false
-	time = t
+type Restriction interface {
+	Handle(t time.Time) (time.Time, bool)
+}
 
-	r_ids := c.relations[restrictionId]
-	for _, r_id := range r_ids {
-		if temp, temp_time := c.handleRestriction(r_id, t); temp && (time.Unix() < temp_time.Unix() || !res) {
-			time = temp_time
-			res = true
+func NewRestriction() Restriction {
+	return &restriction_container{
+		restrictions: make([]restriction, 0, 255),
+		relations:    make(map[byte][]byte),
+		roots:        make([]byte, 0, 255),
+	}
+}
+
+func (c *restriction_container) Handle(t time.Time) (result time.Time, ok bool) {
+	c.last = t
+	for _, rootId := range c.roots {
+		if temp, handled, _ := c.handle(rootId, t, false); handled {
+			if !ok {
+				result = temp
+				ok = true
+			} else {
+				if result.Unix() > temp.Unix() {
+					result = temp
+				}
+			}
 		}
 	}
 
 	return
 }
 
-func (c *restriction_container) handleRestriction(id byte, t time.Time) (res bool, time time.Time) {
-	r := c.restrictions[id]
-	switch r.r_type {
-	case TIMER_INTERVAL:
-		return c.handleInterval(id, r, t)
-	case TIMER_PERIOD:
-		return c.handlePeriod(id, r, t)
-	case TIMER_TIME:
-		return c.handleExact(id, r, t)
-	default:
-		panic("unknown r_type")
-	}
-}
+func (c *restriction_container) handle(id byte, t time.Time, generated bool) (result time.Time, ok bool, result_generated bool) {
+	ok = false
+	result_generated = generated
+	restriction := c.restrictions[id]
 
-func (c *restriction_container) handleInterval(id byte, r restriction, t time.Time) (res bool, time time.Time) {
-	time = t
-	res = false
-
-	from_time := SetPart(t, r.part, r.from)
-	to_time := SetPart(t, r.part, r.to)
-	if from_time.Unix() < t.Unix() {
-		time = from_time
-	}
-
-	for time.Unix() <= to_time.Unix() {
-		if temp, temp_time := c.Handle(id, time); temp && (temp_time.Unix() < time.Unix() || !res) {
-			time = temp_time
-			res = true
+	switch restriction.r_type {
+	case RESTRICTION_INTERVAL:
+		{
+			if restriction.from != DATEPART_NOTSET {
+				from_time := SetPart(t, restriction.part, restriction.from)
+				if t.Unix() < from_time.Unix() {
+					t = from_time
+					result_generated = true
+				}
+			}
+		}
+	case RESTRICTION_EXACT:
+		{
+			t = SetPart(t, restriction.part, restriction.value)
+			result_generated = true
 		}
 	}
 
-	res = res && time.Unix() >= from_time.Unix() && time.Unix() <= to_time.Unix()
-	return
-}
+handler:
+	{
+		result = t
+		relations_ids, relations_ok := c.relations[id]
+		if relations_ok {
+			for _, relation_id := range relations_ids {
+				if temp_time, temp_ok, temp_generated := c.handle(relation_id, result, result_generated); temp_ok {
+					if !ok || result.Unix() > temp_time.Unix() {
+						result = temp_time
+						result_generated = temp_generated
+					}
 
-func (c *restriction_container) handlePeriod(id byte, r restriction, t time.Time) (res bool, time time.Time) {
-	v_part := GetPart(t, r.part)
-	t = SetPart(t, r.part, v_part+r.value)
-
-	res, time = c.Handle(id, t)
-
-	time_part := GetPart(time, r.part)
-	t_part := GetPart(t, r.part)
-	res = t_part == time_part
-
-	return
-}
-
-func (c *restriction_container) handleExact(id byte, r restriction, t time.Time) (res bool, time time.Time) {
-	t = SetPart(t, r.part, r.value)
-
-	res, time = c.Handle(id, t)
-
-	time_part := GetPart(time, r.part)
-	t_part := GetPart(t, r.part)
-	res = t_part == time_part
-	return
-}
-
-func GetPart(dt time.Time, p DatePart) byte {
-	switch p {
-	case DATEPART_YEAR:
-		return byte(dt.Year() - 2000)
-	case DATEPART_MONTH:
-		return byte(dt.Month())
-	case DATEPART_DAY:
-		return byte(dt.Day())
-	case DATEPART_HOUR:
-		return byte(dt.Hour())
-	case DATEPART_MINUTE:
-		return byte(dt.Minute())
-	case DATEPART_SECOND:
-		return byte(dt.Second())
-	default:
-		panic("not defined")
+					ok = true
+				}
+			}
+		} else {
+			ok = true
+		}
 	}
 
-	return 0
+	switch restriction.r_type {
+	case RESTRICTION_INTERVAL:
+		{
+			if ok && restriction.from != DATEPART_NOTSET {
+				ok = result.Unix() >= SetPart(t, restriction.part, restriction.from).Unix()
+			}
+			if ok && restriction.to != DATEPART_NOTSET {
+				ok = result.Unix() <= SetPart(t, restriction.part, restriction.to).Unix()
+			}
+		}
+	case RESTRICTION_PERIOD:
+		{
+			if !result_generated {
+				t = SetPart(t, restriction.part, GetPart(t, restriction.part)+restriction.value)
+				result_generated = true
+				goto handler
+			}
+
+			temp_part := GetPart(t, restriction.part)
+			new_part := GetPart(result, restriction.part)
+			ok = temp_part == new_part
+		}
+	case RESTRICTION_EXACT:
+		{
+			temp_part := GetPart(t, restriction.part)
+			new_part := GetPart(result, restriction.part)
+			ok = temp_part == new_part && c.last.Unix() != result.Unix()
+		}
+	}
+
+	// если возвращается false, дата почемуто 0001-01-01
+	return
 }
 
-func SetPart(t time.Time, p DatePart, v byte) time.Time {
+func GetPart(dt time.Time, p byte) (result byte) {
 	switch p {
 	case DATEPART_YEAR:
-		return time.Date(2000+int(v), 0, 0, 0, 0, 0, 0, nil)
+		result = byte(dt.Year() - 2000)
 	case DATEPART_MONTH:
-		return time.Date(t.Year(), time.Month(v), 0, 0, 0, 0, 0, nil)
+		result = byte(dt.Month())
 	case DATEPART_DAY:
-		return time.Date(t.Year(), t.Month(), int(v), 0, 0, 0, 0, nil)
+		result = byte(dt.Day())
 	case DATEPART_HOUR:
-		return time.Date(t.Year(), t.Month(), t.Day(), int(v), 0, 0, 0, nil)
+		result = byte(dt.Hour())
 	case DATEPART_MINUTE:
-		return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), int(v), 0, 0, nil)
+		result = byte(dt.Minute())
 	case DATEPART_SECOND:
-		return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), int(v), 0, nil)
-	default:
-		panic(fmt.Sprintf("not implemented DATEPART %v", p))
+		result = byte(dt.Second())
 	}
+	return
 }
 
-type restriction_builder struct {
-	id   byte
-	part DatePart
-	list *list.List
-}
-
-func (b *restriction_builder) Year() {
-}
-
-func (b *restriction_builder) Month() {
-}
-
-func (b *restriction_builder) Day() {
-}
-
-func (b *restriction_builder) Hour() {
-}
-
-func (b *restriction_builder) Minute() {
-}
-
-func (b *restriction_builder) Second() {
-}
-
-func (b *restriction_builder) Root(id byte) {
-}
-
-func (b *restriction_builder) Period(period byte) {
-
-}
-
-func (b *restriction_builder) Interval(from byte, to byte) {
-
-}
-
-func (b *restriction_builder) Exact(value byte) {
-
+func SetPart(t time.Time, p byte, v byte) (result time.Time) {
+	switch p {
+	case DATEPART_YEAR:
+		result = time.Date(2000+int(v), 1, 1, 0, 0, 0, 0, t.Location())
+	case DATEPART_MONTH:
+		result = time.Date(t.Year(), time.Month(v), 1, 0, 0, 0, 0, t.Location())
+	case DATEPART_DAY:
+		result = time.Date(t.Year(), t.Month(), int(v), 0, 0, 0, 0, t.Location())
+	case DATEPART_HOUR:
+		result = time.Date(t.Year(), t.Month(), t.Day(), int(v), 0, 0, 0, t.Location())
+	case DATEPART_MINUTE:
+		result = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), int(v), 0, 0, t.Location())
+	case DATEPART_SECOND:
+		result = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), int(v), 0, t.Location())
+	}
+	return
 }
